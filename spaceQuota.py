@@ -174,8 +174,8 @@ def execute(configurations={}, parameters={}, host_name=None):
     		users.append(filestatus.get("pathSuffix"))
 
         critical = []
-	warning = []
-        ok = []
+        warning = []
+       	ok = []
         for user in users:
     
 		current_quota_qry = "{0}://{1}/webhdfs/v1".format(scheme, uri) + location_quota + "/" + user + "?op=GETCONTENTSUMMARY"
