@@ -15,7 +15,6 @@ from resource_management.libraries.functions.curl_krb_request import DEFAULT_KER
 from resource_management.libraries.functions.curl_krb_request import KERBEROS_KINIT_TIMER_PARAMETER
 from resource_management.core.environment import Environment
 
-LABEL = 'The follwing subdirectories: "{d}" in the root directory: "{r}" are over the configured quota capacity threshold: {t}%'
 HDFS_SITE_KEY = '{{hdfs-site}}'
 
 RESULT_STATE_UNKNOWN = 'UNKNOWN'
@@ -145,17 +144,22 @@ def execute(configurations={}, parameters={}, host_name=None):
 
     current_time = int(round(time.time() * 1000))
 
-    all_users_qry = "{0}://{1}/webhdfs/v1".format(scheme, uri) + location_quota + "?op=LISTSTATUS"   
+    critical = []
+    warning = []
+    ok = []
+    for location in location_quota.split(','):
 
-    # start out assuming an OK status
-    label = None
-    result_code = "OK"
+        all_users_qry = "{0}://{1}/webhdfs/v1".format(scheme, uri) + location + "?op=LISTSTATUS"
 
-    try:
-        # curl requires an integer timeout
-        curl_connection_timeout = int(connection_timeout)
+        # start out assuming an OK status
+        label = None
+        result_code = "OK"
 
-        all_users_response, error_msg, time_millis = curl_krb_request("/tmp", kerberos_keytab,
+        try:
+            # curl requires an integer timeout
+            curl_connection_timeout = int(connection_timeout)
+
+            all_users_response, error_msg, time_millis = curl_krb_request("/tmp", kerberos_keytab,
                                                                           kerberos_principal, all_users_qry,
                                                                           "hdfs_space_quota_alert", executable_paths,
                                                                           False,
@@ -163,54 +167,64 @@ def execute(configurations={}, parameters={}, host_name=None):
                                                                           connection_timeout=curl_connection_timeout,
                                                                           kinit_timer_ms=kinit_timer_ms)
 
-        all_users_response_json = json.loads(all_users_response)
+	    # if path does not exist then error
+            if "FileNotFoundException" in all_users_response:
+                return (RESULT_STATE_UNKNOWN, ['Path {p} does not exist'.format(p=location)])
 
-	# if namenode is not active then skip
-        if 'FileStatuses' not in all_users_response_json:
+            all_users_response_json = json.loads(all_users_response)
+
+            # if namenode is not active then skip
+            if 'FileStatuses' not in all_users_response_json:
                 return (RESULT_STATE_SKIPPED, ['NameNode is not active'])
+	    
 
-	users = []
-	for filestatus in all_users_response_json['FileStatuses']['FileStatus']:
-    		users.append(filestatus.get("pathSuffix"))
+            subdirectories = []
+            for filestatus in all_users_response_json['FileStatuses']['FileStatus']:
+                subdirectories.append(filestatus.get("pathSuffix"))
 
-        critical = []
-        warning = []
-       	ok = []
-        for user in users:
-    
-		current_quota_qry = "{0}://{1}/webhdfs/v1".format(scheme, uri) + location_quota + "/" + user + "?op=GETCONTENTSUMMARY"
-		current_quota_response, error_msg, time_millis = curl_krb_request("/tmp", kerberos_keytab,
-                                                                          kerberos_principal, current_quota_qry,
-                                                                          "hdfs_space_quota_alert", executable_paths,
-                                                                          False,
-                                                                          "HDFS Space Quota", smokeuser,
-                                                                          connection_timeout=curl_connection_timeout,
-                                                                          kinit_timer_ms=kinit_timer_ms)
-		
-        	current_quota_response_json = json.loads(current_quota_response)
-        	result_in_percent = int(float(current_quota_response_json["ContentSummary"]["spaceConsumed"]) / float(current_quota_response_json["ContentSummary"]["spaceQuota"]) * 100)
-		
-        	if (result_in_percent >= int(quota_critical)):
-			critical.append(user)
-        	elif (result_in_percent >= int(quota_warning)):
-            		warning.append(user)
-        	else:
-            		ok.append(user)
+            for subdirectory in subdirectories:
 
-	if len(critical) > 0:
-        	result_code = 'CRITICAL'
-                criticalusers = ",".join([str(x) for x in critical])
-                label = LABEL.format(d=criticalusers,r=location_quota,t=quota_critical)
-	elif len(warning) > 0:
-		result_code = 'WARNING'
-		warningusers = ",".join([str(x) for x in warning])
-                label = LABEL.format(d=warningusers,r=location_quota,t=quota_warning)
-	else:
-                result_code = "OK"
-                label = 'All top-level user subdirectories in "{d}" are within configured quota capacity threshold'.format(d=location_quota)
+                current_quota_qry = "{0}://{1}/webhdfs/v1".format(scheme,
+                                                                  uri) + location + "/" + subdirectory + "?op=GETCONTENTSUMMARY"
+                current_quota_response, error_msg, time_millis = curl_krb_request("/tmp", kerberos_keytab,
+                                                                                  kerberos_principal, current_quota_qry,
+                                                                                  "hdfs_space_quota_alert",
+                                                                                  executable_paths,
+                                                                                  False,
+                                                                                  "HDFS Space Quota", smokeuser,
+                                                                                  connection_timeout=curl_connection_timeout,
+                                                                                  kinit_timer_ms=kinit_timer_ms)
 
-    except:
-        label = traceback.format_exc()
-        result_code = 'UNKNOWN'
+                current_quota_response_json = json.loads(current_quota_response)
+                result_in_percent = int(float(current_quota_response_json["ContentSummary"]["spaceConsumed"]) / float(
+                    current_quota_response_json["ContentSummary"]["spaceQuota"]) * 100)
+
+                if (result_in_percent >= int(quota_critical)):
+                    critical.append(location + "/" + subdirectory)
+                elif (result_in_percent >= int(quota_warning)):
+                    warning.append(location + "/" + subdirectory)
+                else:
+                    ok.append(location + "/" + subdirectory)
+
+        except:
+            label = traceback.format_exc()
+            result_code = 'UNKNOWN'
+
+    if len(critical) > 0:
+        result_code = 'CRITICAL'
+        criticaldirectories = ",".join([str(x) for x in critical])
+        warningdirectories = ",".join([str(x) for x in warning])
+	if len(warning) > 0:
+		label = 'The following directories are beyond the space quota CRITICAL Treshold of {c}%: "{d}" \n' \
+			'The following directories are beyond the space quota WARNING Treshold of {w}%: "{r}"'.format(c=quota_critical,w=quota_warning,d=criticaldirectories,r=warningdirectories)
+        else:
+		label = 'The following directories are beyond the space quota CRITICAL Treshold of {c}%: "{d}"'.format(c=quota_critical,d=criticaldirectories)
+    elif len(warning) > 0:
+        result_code = 'WARNING'
+        warningdirectories = ",".join([str(x) for x in warning])
+        label = 'The following directories are beyond the space quota WARNING Treshold of {w}%: "{r}"'.format(w=quota_warning,r=warningdirectories)
+    else:
+        result_code = "OK"
+        label = 'All top-level subdirectories "{l}" are within configured quota capacity threshold'.format(l=location_quota)
 
     return ((result_code, [label]))
