@@ -145,8 +145,6 @@ def execute(configurations={}, parameters={}, host_name=None):
 
     current_time = int(round(time.time() * 1000))
 
-    current_quota_qry = "{0}://{1}/webhdfs/v1".format(scheme, uri) + location_quota + "?op=GETCONTENTSUMMARY"
-
     all_users_qry = "{0}://{1}/webhdfs/v1".format(scheme, uri) + location_quota + "?op=LISTSTATUS"   
 
     # start out assuming an OK status
@@ -166,6 +164,10 @@ def execute(configurations={}, parameters={}, host_name=None):
                                                                           kinit_timer_ms=kinit_timer_ms)
 
         all_users_response_json = json.loads(all_users_response)
+
+	# if namenode is not active then skip
+        if 'FileStatuses' not in all_users_response_json:
+                return (RESULT_STATE_SKIPPED, ['NameNode is not active'])
 
 	users = []
 	for filestatus in all_users_response_json['FileStatuses']['FileStatus']:
@@ -205,7 +207,7 @@ def execute(configurations={}, parameters={}, host_name=None):
                 label = LABEL.format(d=warningusers,r=location_quota,t=quota_warning)
 	else:
                 result_code = "OK"
-                label = 'All top-level user subdirectories in "{d}" in the root directory "{r} are within configured quota capacity threshold'.format(d=location_quota,r=location_quota)
+                label = 'All top-level user subdirectories in "{d}" are within configured quota capacity threshold'.format(d=location_quota)
 
     except:
         label = traceback.format_exc()
